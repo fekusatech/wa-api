@@ -18,46 +18,137 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // WhatsApp Client Configuration
-const client = new Client({
-    authStrategy: new LocalAuth({
-        clientId: process.env.WA_SESSION_NAME || 'whatsapp-session'
-    }),
-    puppeteer: {
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process',
-            '--disable-gpu'
-        ]
+let client;
+let clientInitialized = false;
+let initializationAttempts = 0;
+const maxInitAttempts = 3;
+
+function createWhatsAppClient() {
+    return new Client({
+        authStrategy: new LocalAuth({
+            clientId: process.env.WA_SESSION_NAME || 'whatsapp-session',
+            dataPath: './.wwebjs_auth'
+        }),
+        puppeteer: {
+            headless: true,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--disable-gpu',
+                '--disable-web-security',
+                '--disable-extensions',
+                '--disable-plugins',
+                '--disable-images',
+                '--disable-javascript',
+                '--disable-default-apps',
+                '--disable-sync',
+                '--disable-translate',
+                '--hide-scrollbars',
+                '--mute-audio',
+                '--no-default-browser-check',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                '--disable-features=TranslateUI',
+                '--disable-ipc-flooding-protection'
+            ],
+            executablePath: process.env.CHROME_PATH || undefined,
+            timeout: 60000
+        },
+        webVersionCache: {
+            type: 'remote',
+            remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+        }
+    });
+}
+
+// Initialize WhatsApp client with retry mechanism
+async function initializeWhatsAppClient() {
+    if (clientInitialized) {
+        return true;
     }
-});
 
-// WhatsApp Client Event Handlers
-client.on('qr', (qr) => {
-    logger.info('QR Code received, scan to authenticate:');
-    qrcode.generate(qr, { small: true });
-});
+    if (initializationAttempts >= maxInitAttempts) {
+        logger.error('Maximum initialization attempts reached. WhatsApp client will not be available.');
+        return false;
+    }
 
-client.on('ready', () => {
-    logger.info('WhatsApp client is ready!');
-});
+    initializationAttempts++;
+    logger.info(`Initializing WhatsApp client (attempt ${initializationAttempts}/${maxInitAttempts})...`);
 
-client.on('authenticated', () => {
-    logger.info('WhatsApp client authenticated successfully');
-});
+    try {
+        client = createWhatsAppClient();
+        
+        // Set up event handlers
+        client.on('qr', (qr) => {
+            logger.info('QR Code received, scan to authenticate:');
+            qrcode.generate(qr, { small: true });
+        });
 
-client.on('auth_failure', (msg) => {
-    logger.error('Authentication failed:', msg);
-});
+        client.on('ready', () => {
+            logger.info('WhatsApp client is ready!');
+            clientInitialized = true;
+            initializationAttempts = 0; // Reset counter on success
+        });
 
-client.on('disconnected', (reason) => {
-    logger.warn('WhatsApp client was disconnected:', reason);
-});
+        client.on('authenticated', () => {
+            logger.info('WhatsApp client authenticated successfully');
+        });
+
+        client.on('auth_failure', (msg) => {
+            logger.error('Authentication failed:', msg);
+            clientInitialized = false;
+        });
+
+        client.on('disconnected', (reason) => {
+            logger.warn('WhatsApp client was disconnected:', reason);
+            clientInitialized = false;
+            
+            // Retry connection after delay
+            setTimeout(() => {
+                if (!clientInitialized) {
+                    logger.info('Attempting to reconnect WhatsApp client...');
+                    initializeWhatsAppClient();
+                }
+            }, 10000);
+        });
+
+        await client.initialize();
+        return true;
+    } catch (error) {
+        logger.error('Error initializing WhatsApp client:', {
+            error: error.message,
+            stack: error.stack,
+            attempt: initializationAttempts
+        });
+        
+        // Clean up failed client
+        if (client) {
+            try {
+                await client.destroy();
+            } catch (destroyError) {
+                logger.error('Error destroying failed client:', destroyError);
+            }
+            client = null;
+        }
+        
+        // Retry after delay
+        if (initializationAttempts < maxInitAttempts) {
+            setTimeout(() => {
+                initializeWhatsAppClient();
+            }, 5000 * initializationAttempts); // Exponential backoff
+        }
+        
+        return false;
+    }
+}
+
+// WhatsApp Client Event Handlers (moved to initialization function)
+// ... (event handlers moved to initializeWhatsAppClient function)
 
 // API Routes
 const apiRouter = express.Router();
@@ -68,7 +159,8 @@ apiRouter.get('/health', (req, res) => {
         status: 'ok',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
-        whatsapp_ready: client.info ? true : false
+        whatsapp_ready: clientInitialized,
+        initialization_attempts: initializationAttempts
     });
 });
 
@@ -86,10 +178,12 @@ apiRouter.post('/send-message', async (req, res) => {
         }
 
         // Check if WhatsApp client is ready
-        if (!client.info) {
+        if (!client || !clientInitialized) {
             return res.status(503).json({
                 status: false,
-                error: 'WhatsApp client is not ready. Please scan QR code first.'
+                error: 'WhatsApp client is not ready. Please wait for initialization or scan QR code.',
+                ready: clientInitialized,
+                attempts: initializationAttempts
             });
         }
 
@@ -155,10 +249,12 @@ apiRouter.post('/send-message', async (req, res) => {
 // Get client info endpoint
 apiRouter.get('/client-info', async (req, res) => {
     try {
-        if (!client.info) {
+        if (!client || !clientInitialized) {
             return res.status(503).json({
                 status: false,
-                error: 'WhatsApp client is not ready'
+                error: 'WhatsApp client is not ready',
+                ready: clientInitialized,
+                attempts: initializationAttempts
             });
         }
 
@@ -169,7 +265,8 @@ apiRouter.get('/client-info', async (req, res) => {
                 user: info.wid.user,
                 phone: info.wid.user,
                 name: info.pushname,
-                connected: true
+                connected: true,
+                ready: clientInitialized
             }
         });
     } catch (error) {
@@ -181,11 +278,50 @@ apiRouter.get('/client-info', async (req, res) => {
     }
 });
 
+// Restart WhatsApp client endpoint
+apiRouter.post('/restart-client', async (req, res) => {
+    try {
+        logger.info('Manually restarting WhatsApp client...');
+        
+        // Destroy existing client if any
+        if (client) {
+            try {
+                await client.destroy();
+            } catch (destroyError) {
+                logger.warn('Error destroying existing client during restart:', destroyError);
+            }
+        }
+        
+        // Reset states
+        client = null;
+        clientInitialized = false;
+        initializationAttempts = 0;
+        
+        // Initialize new client
+        const success = await initializeWhatsAppClient();
+        
+        return res.json({
+            status: true,
+            message: 'WhatsApp client restart initiated',
+            success: success
+        });
+    } catch (error) {
+        logger.error('Error restarting WhatsApp client:', error);
+        return res.status(500).json({
+            status: false,
+            error: 'Failed to restart WhatsApp client'
+        });
+    }
+});
+
 // Logout endpoint
 apiRouter.post('/logout', async (req, res) => {
     try {
-        await client.logout();
-        logger.info('WhatsApp client logged out successfully');
+        if (client && clientInitialized) {
+            await client.logout();
+            clientInitialized = false;
+            logger.info('WhatsApp client logged out successfully');
+        }
         return res.json({
             status: true,
             message: 'Logged out successfully'
@@ -246,8 +382,10 @@ process.on('SIGINT', async () => {
     logger.info('Received SIGINT, shutting down gracefully...');
     
     try {
-        await client.destroy();
-        logger.info('WhatsApp client destroyed');
+        if (client && clientInitialized) {
+            await client.destroy();
+            logger.info('WhatsApp client destroyed');
+        }
     } catch (error) {
         logger.error('Error destroying WhatsApp client:', error);
     }
@@ -259,8 +397,10 @@ process.on('SIGTERM', async () => {
     logger.info('Received SIGTERM, shutting down gracefully...');
     
     try {
-        await client.destroy();
-        logger.info('WhatsApp client destroyed');
+        if (client && clientInitialized) {
+            await client.destroy();
+            logger.info('WhatsApp client destroyed');
+        }
     } catch (error) {
         logger.error('Error destroying WhatsApp client:', error);
     }
@@ -269,14 +409,16 @@ process.on('SIGTERM', async () => {
 });
 
 // Start the server
-app.listen(port, () => {
+app.listen(port, async () => {
     logger.info(`WhatsApp API Gateway server started on port ${port}`);
     logger.info(`API endpoints available at: http://localhost:${port}${process.env.API_BASE_PATH || '/api'}`);
     
-    // Initialize WhatsApp client
-    client.initialize().catch(error => {
-        logger.error('Error initializing WhatsApp client:', error);
-    });
+    // Initialize WhatsApp client with delay to ensure server is ready
+    setTimeout(() => {
+        initializeWhatsAppClient().catch(error => {
+            logger.error('Failed to initialize WhatsApp client during startup:', error);
+        });
+    }, 2000);
 });
 
 module.exports = app;

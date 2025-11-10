@@ -144,7 +144,21 @@ GET /api/client-info
 }
 ```
 
-#### 4. Logout
+#### 4. Restart WhatsApp Client
+```http
+POST /api/restart-client
+```
+
+**Response:**
+```json
+{
+  "status": true,
+  "message": "WhatsApp client restart initiated",
+  "success": true
+}
+```
+
+#### 5. Logout
 ```http
 POST /api/logout
 ```
@@ -235,24 +249,143 @@ Set environment variable `LOG_LEVEL` untuk mengontrol level logging.
 
 ## 🐛 Troubleshooting
 
-### QR Code tidak muncul
-- Pastikan aplikasi berjalan di environment yang support terminal
-- Cek apakah port 3000 tidak diblokir
-- Restart aplikasi
+### Quick Diagnosis
+Jalankan script troubleshooting untuk diagnosis cepat:
+```bash
+./troubleshoot.sh
+```
 
-### Authentication gagal
-- Hapus folder `.wwebjs_auth` dan `.wwebjs_cache`
-- Restart aplikasi dan scan QR code lagi
+### Common Issues & Solutions
 
-### Pesan tidak terkirim
-- Cek status WhatsApp client dengan endpoint `/api/client-info`
-- Pastikan nomor telepon target valid dan terdaftar di WhatsApp
-- Cek logs untuk detail error
+#### 1. "Error initializing WhatsApp client"
+**Penyebab:** Missing Chrome dependencies atau puppeteer configuration issues.
+
+**Solusi:**
+```bash
+# Install Chrome dependencies (Ubuntu/Debian)
+./install-chrome.sh
+
+# Atau manual install Chrome
+sudo apt-get update
+sudo apt-get install -y google-chrome-stable
+
+# Clear session data dan restart
+rm -rf .wwebjs_auth .wwebjs_cache
+pm2 restart server
+```
+
+#### 2. QR Code tidak muncul
+**Penyebab:** Terminal tidak support atau environment issues.
+
+**Solusi:**
+- Pastikan running di terminal yang support output
+- Cek logs: `pm2 logs server`
+- Force restart client: `curl -X POST http://localhost:3000/api/restart-client`
+- Cek status: `curl http://localhost:3000/api/health`
+
+#### 3. Authentication gagal berulang
+**Solusi:**
+```bash
+# Hapus semua session data
+rm -rf .wwebjs_auth .wwebjs_cache
+pm2 restart server
+
+# Monitor logs untuk QR code baru
+pm2 logs server --lines 50
+```
+
+#### 4. Pesan tidak terkirim
+**Diagnosis:**
+```bash
+# Cek status client
+curl http://localhost:3000/api/client-info
+
+# Cek health
+curl http://localhost:3000/api/health
+```
+
+**Solusi:**
+- Pastikan WhatsApp client ready (client-info endpoint)
+- Validasi format nomor telepon
+- Cek logs untuk error detail
+
+#### 5. High Memory Usage
+**Solusi:**
+```bash
+# Restart aplikasi secara berkala
+pm2 restart server
+
+# Monitor memory usage
+pm2 monit
+
+# Set memory limit di PM2
+pm2 start server.js --max-memory-restart 500M
+```
+
+#### 6. Port sudah digunakan
+```bash
+# Cek proses yang menggunakan port
+lsof -i :3000
+
+# Kill proses jika diperlukan
+sudo kill -9 <PID>
+
+# Atau gunakan port lain di .env
+echo "PORT=3001" >> .env
+```
+
+### Environment-Specific Issues
+
+#### Ubuntu/Debian
+```bash
+# Install dependencies lengkap
+sudo apt-get update
+sudo apt-get install -y nodejs npm google-chrome-stable
+
+# Fix permission issues
+sudo chown -R $USER:$USER .wwebjs_auth
+```
+
+#### CentOS/RHEL
+```bash
+# Install Chrome
+wget https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm
+sudo yum localinstall google-chrome-stable_current_x86_64.rpm
+```
+
+#### Docker Issues
+Jika running di Docker, tambahkan di Dockerfile:
+```dockerfile
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list' \
+    && apt-get update \
+    && apt-get install -y google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+### Debug Mode
+Untuk debugging detail, set environment:
+```bash
+export NODE_ENV=development
+export LOG_LEVEL=debug
+npm start
+```
 
 ### Performance Issues
-- Monitor memory usage, WhatsApp Web bisa memory-intensive
-- Consider restarting aplikasi secara berkala
-- Monitor disk space untuk session files
+**Monitor performance:**
+```bash
+# CPU dan memory usage
+top -p $(pgrep -f "node.*server.js")
+
+# PM2 monitoring
+pm2 monit
+
+# Check disk space
+df -h
+```
 
 ## 📦 Production Deployment
 
