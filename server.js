@@ -24,6 +24,32 @@ let initializationAttempts = 0;
 const maxInitAttempts = 3;
 
 function createWhatsAppClient() {
+    // Try to find Chrome executable
+    const chromePaths = [
+        process.env.CHROME_PATH,
+        process.env.PUPPETEER_EXECUTABLE_PATH,
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/google-chrome',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/snap/bin/chromium'
+    ].filter(Boolean);
+
+    let executablePath = undefined;
+    const fs = require('fs');
+    
+    for (const path of chromePaths) {
+        try {
+            if (fs.existsSync(path)) {
+                executablePath = path;
+                logger.info(`Using Chrome executable: ${executablePath}`);
+                break;
+            }
+        } catch (error) {
+            // Continue to next path
+        }
+    }
+
     return new Client({
         authStrategy: new LocalAuth({
             clientId: process.env.WA_SESSION_NAME || 'whatsapp-session',
@@ -31,6 +57,7 @@ function createWhatsAppClient() {
         }),
         puppeteer: {
             headless: true,
+            executablePath: executablePath,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -43,7 +70,6 @@ function createWhatsAppClient() {
                 '--disable-extensions',
                 '--disable-plugins',
                 '--disable-images',
-                '--disable-javascript',
                 '--disable-default-apps',
                 '--disable-sync',
                 '--disable-translate',
@@ -54,9 +80,14 @@ function createWhatsAppClient() {
                 '--disable-backgrounding-occluded-windows',
                 '--disable-renderer-backgrounding',
                 '--disable-features=TranslateUI',
-                '--disable-ipc-flooding-protection'
+                '--disable-ipc-flooding-protection',
+                '--disable-hang-monitor',
+                '--disable-client-side-phishing-detection',
+                '--disable-component-update',
+                '--no-first-run',
+                '--disable-default-apps',
+                '--disable-popup-blocking'
             ],
-            executablePath: process.env.CHROME_PATH || undefined,
             timeout: 60000
         },
         webVersionCache: {
