@@ -409,9 +409,18 @@ apiRouter.post('/send-message', async (req, res) => {
     try {
         const { to, message, sender, type } = req.body;
 
+        // log request payload for debugging
+        logger.info('Received send-message request', {
+            to,
+            messageLength: message ? message.length : 0,
+            sender,
+            type
+        });
+
         // validate and sanitize payload using helpers
         const validation = validateSendMessagePayload(req.body);
         if (!validation.isValid) {
+            logger.warn('send-message validation failed', { errors: validation.errors, payload: req.body });
             return res.status(400).json({
                 status: false,
                 errors: validation.errors
@@ -420,6 +429,11 @@ apiRouter.post('/send-message', async (req, res) => {
 
         // Check if WhatsApp client is ready
         if (!client || !clientInitialized) {
+            logger.warn('send-message rejected: client not ready', {
+                payload: req.body,
+                ready: clientInitialized,
+                attempts: initializationAttempts
+            });
             return res.status(503).json({
                 status: false,
                 error: 'WhatsApp client is not ready. Please wait for initialization or scan QR code.',
@@ -503,8 +517,9 @@ apiRouter.post('/send-message', async (req, res) => {
         }
 
         logger.info(`Message sent successfully to ${formattedPhone}`, {
-            messageId: sentMessage.id.id,
-            timestamp: sentMessage.timestamp
+            messageId: sentMessage.id ? sentMessage.id.id : null,
+            timestamp: sentMessage.timestamp,
+            result: sentMessage
         });
 
         return res.json({

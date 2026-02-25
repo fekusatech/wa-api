@@ -56,12 +56,22 @@ npm start
 ## 📱 Authentication Setup
 
 1. Jalankan aplikasi
-2. Perhatikan log, akan muncul event `QR Code received` yang menyertakan string QR (jika LOG_LEVEL=info atau lebih tinggi).
-3. Scan QR Code tersebut dengan WhatsApp pada ponsel Anda. Jika Anda tidak menerima kode OTP, pastikan QR sudah dipindai; library tidak mengirimkan OTP, WhatsApp akan mengirimkan notifikasi ke aplikasi WA Anda.
-4. Jika `ready` tidak muncul dalam 60 detik, cek kembali QR/OTP di ponsel. Anda dapat memulai ulang client dengan endpoint `/api/restart-client` jika perlu.
-5. Setelah event `WhatsApp client is ready!` tercatat, API siap digunakan!
+2. Perhatikan log, akan muncul event `QR Code received` yang menyertakan string QR (jika `LOG_LEVEL` diatur ke `info` atau lebih tinggi).
+3. Scan QR Code tersebut dengan WhatsApp pada ponsel Anda. Tidak ada OTP yang dikirimkan oleh gateway—WhatsApp sendiri akan menampilkan notifikasi di aplikasi WA setelah QR dipindai.
+4. **Penting:** Anda tidak boleh mengirim permintaan `/send-message` sampai log memasukkan baris `"WhatsApp client is ready!"`. Jika Anda mencoba lebih cepat, endpoint akan merespons 503 dan log akan berisi peringatan `send-message rejected: client not ready`.
+5. Jika tidak ada log `ready` dalam 60 detik, cek QR/ponsel dan gunakan `/api/restart-client` bila perlu. Log juga sekarang mencatat `auth_failure`, `session_update`, dan status perubahan untuk membantu debugging.
 
-Logs tambahan akan membantu men-debug proses otentikasi (QR, auth_failure, session_update, dll.).
+Setelah client siap, permintaan yang berhasil akan menghasilkan log seperti:
+
+```
+INFO  Message sent successfully to 628123456789 {
+  messageId: '...' ,
+  timestamp: 1641801600,
+  result: { …full message object… }
+}
+```
+
+Logs ini membuktikan bahwa pesan dikirim; bila tidak ada baris seperti itu dan Anda menerima 503, berarti client masih belum siap.
 
 ## 📚 API Documentation
 
