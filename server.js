@@ -4,7 +4,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const { formatPhoneNumber, logger } = require('./utils/helpers');
+const { formatPhoneNumber, logger, sanitizeMessage, validateSendMessagePayload } = require('./utils/helpers');
 require('dotenv').config();
 
 const app = express();
@@ -148,7 +148,21 @@ function queueMessage(chatId, message) {
             reject,
             timestamp: Date.now(),
             execute: async function() {
-                this.result = await client.sendMessage(this.chatId, this.message);
+                try {
+                    this.result = await client.sendMessage(this.chatId, this.message);
+                } catch (err) {
+                    // whatsapp-web.js occasionally throws an evaluation error
+                    // when trying to mark the chat as unread (bug in library).
+                    // we ignore it and return a dummy result so the queue continues.
+                    if (err.message && err.message.includes('markedUnread')) {
+                        logger.warn('Non‑critical sendMessage error (markedUnread), ignoring', {
+                            error: err.message
+                        });
+                        this.result = { id: { id: null }, timestamp: Date.now() };
+                    } else {
+                        throw err;
+                    }
+                }
             }
         };
 
@@ -378,11 +392,12 @@ apiRouter.post('/send-message', async (req, res) => {
     try {
         const { to, message, sender, type } = req.body;
 
-        // Validate required fields
-        if (!to || !message) {
+        // validate and sanitize payload using helpers
+        const validation = validateSendMessagePayload(req.body);
+        if (!validation.isValid) {
             return res.status(400).json({
                 status: false,
-                error: 'Missing required fields: to, message'
+                errors: validation.errors
             });
         }
 
@@ -405,18 +420,19 @@ apiRouter.post('/send-message', async (req, res) => {
             });
         }
 
-        // Prepare message content
-        let messageContent = message;
-        if (sender) {
-            messageContent = `*${sender}*\n\n${message}`;
+        // Prepare message content (sanitize to prevent injection)
+        let messageContent = sanitizeMessage(message);
+        const senderLabel = sender ? sanitizeMessage(sender) : null;
+        if (senderLabel) {
+            messageContent = `*${senderLabel}*\n\n${messageContent}`;
         }
 
         // Log the message attempt
         logger.info(`Attempting to send message to ${formattedPhone}`, {
             to: formattedPhone,
-            sender: sender || 'Unknown',
+            sender: senderLabel || 'Unknown',
             type: type || 'direct_message',
-            messageLength: message.length
+            messageLength: messageContent.length
         });
 
         // Send the message with retry mechanism

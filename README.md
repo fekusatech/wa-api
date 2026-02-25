@@ -171,6 +171,27 @@ POST /api/logout
 }
 ```
 
+## ⚠️ Known Issues & Troubleshooting
+
+### Evaluation error on message send
+If you see an error similar to the following when hitting `/send-message`:
+
+```
+Error sending WhatsApp message: Evaluation failed: TypeError: Cannot read properties of undefined (reading 'markedUnread')
+```
+
+This is a bug inside the `whatsapp-web.js` library where the underlying page tries to mark the chat as unread. It does **not** prevent the message from being sent, but it will cause your API request to fail unless handled.
+
+To mitigate:
+
+1. Upgrade to the latest `whatsapp-web.js` release where the issue is fixed (run `npm install whatsapp-web.js@latest`).
+2. The server code already includes a catch‑and‑ignore heuristic around `markedUnread` errors, so you can safely ignore the warning in the logs.
+3. If the problem persists, restart the WhatsApp client with `/api/restart-client` or re‑authenticate by deleting the `.wwebjs_auth` folder.
+
+The bug does not affect message delivery; it merely generates a noisy error stack trace.
+
+---
+
 ## 🔧 PHP Integration Example
 
 Sesuai dengan kebutuhan Anda, berikut adalah fungsi PHP yang dapat digunakan:
