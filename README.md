@@ -56,9 +56,12 @@ npm start
 ## 📱 Authentication Setup
 
 1. Jalankan aplikasi
-2. Scan QR Code yang muncul di terminal menggunakan WhatsApp di phone Anda
-3. Tunggu hingga authentication berhasil
-4. API siap digunakan!
+2. Perhatikan log, akan muncul event `QR Code received` yang menyertakan string QR (jika LOG_LEVEL=info atau lebih tinggi).
+3. Scan QR Code tersebut dengan WhatsApp pada ponsel Anda. Jika Anda tidak menerima kode OTP, pastikan QR sudah dipindai; library tidak mengirimkan OTP, WhatsApp akan mengirimkan notifikasi ke aplikasi WA Anda.
+4. Jika `ready` tidak muncul dalam 60 detik, cek kembali QR/OTP di ponsel. Anda dapat memulai ulang client dengan endpoint `/api/restart-client` jika perlu.
+5. Setelah event `WhatsApp client is ready!` tercatat, API siap digunakan!
+
+Logs tambahan akan membantu men-debug proses otentikasi (QR, auth_failure, session_update, dll.).
 
 ## 📚 API Documentation
 

@@ -282,11 +282,20 @@ async function initializeWhatsAppClient() {
         
         // Set up event handlers
         client.on('qr', (qr) => {
-            logger.info('QR Code received, scan to authenticate:');
+            logger.info('QR Code received, scan to authenticate (raw data included)', { qr });
+            // print to terminal for manual scanning as well
             qrcode.generate(qr, { small: true });
         });
 
+        // set a watchdog in case "ready" never fires
+        let readyTimeout = setTimeout(() => {
+            if (!clientInitialized) {
+                logger.warn('WhatsApp client has not emitted ready event within 60s. Make sure QR was scanned or OTP/2FA completed on the phone.');
+            }
+        }, 60000);
+
         client.on('ready', () => {
+            clearTimeout(readyTimeout);
             logger.info('WhatsApp client is ready!');
             clientInitialized = true;
             initializationAttempts = 0; // Reset counter on success
@@ -303,8 +312,16 @@ async function initializeWhatsAppClient() {
         });
 
         client.on('auth_failure', (msg) => {
-            logger.error('Authentication failed:', msg);
+            logger.error('Authentication failed (auth_failure event):', { message: msg });
             clientInitialized = false;
+        });
+
+        client.on('session_update', (session) => {
+            logger.info('Session updated, data saved to disk');
+        });
+
+        client.on('change_state', (state) => {
+            logger.info('WhatsApp client state changed:', state);
         });
 
         client.on('disconnected', (reason) => {
