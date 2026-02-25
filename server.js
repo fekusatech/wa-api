@@ -285,17 +285,31 @@ async function initializeWhatsAppClient() {
             logger.info('QR Code received, scan to authenticate (raw data included)', { qr });
             // print to terminal for manual scanning as well
             qrcode.generate(qr, { small: true });
+            // start ready watchdog after user sees QR
+            startReadyWatchdog();
         });
 
-        // set a watchdog in case "ready" never fires
-        let readyTimeout = setTimeout(() => {
-            if (!clientInitialized) {
-                logger.warn('WhatsApp client has not emitted ready event within 60s. Make sure QR was scanned or OTP/2FA completed on the phone.');
+        // also start watchdog when authentication completes (session file reused)
+        client.on('authenticated', () => {
+            logger.info('WhatsApp client authenticated successfully');
+            startReadyWatchdog();
+        });
+
+        // helper that starts or resets the ready timeout
+        let readyTimeout;
+        function startReadyWatchdog() {
+            if (readyTimeout) {
+                clearTimeout(readyTimeout);
             }
-        }, 60000);
+            readyTimeout = setTimeout(() => {
+                if (!clientInitialized) {
+                    logger.warn('WhatsApp client has not emitted ready event within 60s. Make sure QR was scanned or OTP/2FA completed on the phone.');
+                }
+            }, 60000);
+        }
 
         client.on('ready', () => {
-            clearTimeout(readyTimeout);
+            if (readyTimeout) clearTimeout(readyTimeout);
             logger.info('WhatsApp client is ready!');
             clientInitialized = true;
             initializationAttempts = 0; // Reset counter on success
@@ -306,6 +320,7 @@ async function initializeWhatsAppClient() {
             // Process any queued messages
             processMessageQueue();
         });
+
 
         client.on('authenticated', () => {
             logger.info('WhatsApp client authenticated successfully');
@@ -353,6 +368,37 @@ async function initializeWhatsAppClient() {
         });
 
         await client.initialize();
+
+        // attach puppeteer page event handlers for extra visibility and auto‑recovery
+        try {
+            const page = client.pupPage;
+            if (page) {
+                page.on('error', err => {
+                    logger.error('Puppeteer page error event', { error: err.message });
+                    recoverSession();
+                });
+                page.on('pageerror', err => {
+                    logger.error('Puppeteer pageerror event', { error: err.message });
+                    // error during script execution can indicate unstable context
+                    if (err.message && err.message.includes('Execution context was destroyed')) {
+                        logger.warn('Page error signals context destroyed, recovering session');
+                        recoverSession();
+                    }
+                });
+                page.on('crash', () => {
+                    logger.error('Puppeteer page crashed, attempting recovery');
+                    recoverSession();
+                });
+                page.on('close', () => {
+                    logger.warn('Puppeteer page closed unexpectedly');
+                    clientInitialized = false;
+                });
+            }
+        } catch (attachErr) {
+            // non‑fatal, just log
+            logger.warn('Could not attach puppeteer page listeners:', attachErr.message);
+        }
+
         return true;
     } catch (error) {
         logger.error('Error initializing WhatsApp client:', {
@@ -749,6 +795,23 @@ app.use((req, res) => {
         status: false,
         error: 'Endpoint not found'
     });
+});
+
+// Global error handlers to catch library internal crashes
+process.on('unhandledRejection', (reason, promise) => {
+    logger.error('Unhandled promise rejection', { reason: reason && reason.stack ? reason.stack : reason });
+    if (reason && reason.message && reason.message.includes('Execution context was destroyed')) {
+        logger.warn('Detected execution context destroyed error, attempting session recovery');
+        recoverSession().catch(err => logger.error('Error during automatic recovery:', err));
+    }
+});
+
+process.on('uncaughtException', err => {
+    logger.error('Uncaught exception', { error: err.stack || err });
+    if (err.message && err.message.includes('Execution context was destroyed')) {
+        logger.warn('Uncaught execution context error, recovering session');
+        recoverSession().catch(e => logger.error('Error during recovery after uncaught exception:', e));
+    }
 });
 
 // Graceful shutdown

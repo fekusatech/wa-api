@@ -205,6 +205,27 @@ The bug does not affect message delivery; it merely generates a noisy error stac
 
 ---
 
+### Execution context destroyed / navigation errors
+When the page inside Puppeteer reloads or navigates while the library is trying to inject helpers you may see:
+
+```
+Error: Execution context was destroyed, most likely because of a navigation.
+    at rewriteError …
+    at async exposeFunctionIfAbsent …
+    at async Client.inject …
+```
+
+This usually happens during a version update of WhatsApp Web or a transient page reload. The process will log the full stack trace and the gateway now listens for those errors and will perform an automatic session recovery. After recovery the client should reconnect and eventually emit the `ready` event; you can watch for the `WhatsApp client is ready!` line to know it’s safe to send.
+
+If the error persists repeatedly:
+
+1. Inspect the log around the failure – it should contain entries like `Puppeteer page error` or `page crashed` followed by a recovery attempt.
+2. Wait a minute for the ready log; the queue will resume after recovery.
+3. Manually call `POST /api/restart-client` or restart the PM2 process if recovery does not succeed.
+4. Setting `LOG_LEVEL=debug` gives more diagnostic detail.
+
+---
+
 ## 🔧 PHP Integration Example
 
 Sesuai dengan kebutuhan Anda, berikut adalah fungsi PHP yang dapat digunakan:
